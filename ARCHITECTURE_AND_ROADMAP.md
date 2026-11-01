@@ -1,327 +1,79 @@
-# KubePilot
+# Architecture and roadmap
 
-## AI-Powered Kubernetes Operations Platform
+This describes code currently present in KubePilot and separates implemented
+behavior from plans. It is not a production architecture or delivery
+commitment.
 
-KubePilot is a cloud-native AI operations platform designed to assist engineers with Kubernetes troubleshooting, operational knowledge retrieval, deployment diagnostics, and platform automation.
-
-Unlike traditional chatbots, KubePilot combines Retrieval-Augmented Generation (RAG), agentic workflows, Kubernetes-native tooling, GitOps practices, and observability into a unified system capable of reasoning over documentation and interacting with real infrastructure.
-
-The goal is to build a production-style platform that demonstrates modern AI Engineering, Platform Engineering, and DevOps practices in a single repository.
-
----
-
-# Vision
-
-Modern platform teams spend significant time searching documentation, investigating deployment failures, analyzing logs, and performing repetitive operational tasks.
-
-KubePilot aims to reduce this operational overhead by providing an AI-powered assistant that can:
-
-* Retrieve operational knowledge from internal runbooks
-* Diagnose Kubernetes issues
-* Analyze deployments and cluster health
-* Interact with platform tooling
-* Provide contextual recommendations
-* Serve as a foundation for future automation workflows
-
-The project is designed to remain fully self-hosted and runnable on local infrastructure while following production-grade engineering practices.
-
----
-
-# Core Use Cases
-
-## Deployment Troubleshooting
-
-User:
-
-> Why is my deployment failing?
-
-KubePilot should:
-
-1. Retrieve relevant runbooks
-2. Inspect deployment status
-3. Analyze recent events
-4. Fetch pod information
-5. Generate a diagnosis
-6. Suggest remediation steps
-
----
-
-## Operational Knowledge Assistant
-
-User:
-
-> How do we perform a rolling restart?
-
-KubePilot should:
-
-1. Search indexed documentation
-2. Retrieve relevant context
-3. Generate an answer grounded in runbooks
-
----
-
-## Cluster Visibility
-
-User:
-
-> Show unhealthy workloads in the cluster.
-
-KubePilot should:
-
-1. Query Kubernetes APIs
-2. Collect workload status
-3. Summarize cluster health
-
----
-
-## Incident Investigation
-
-User:
-
-> Why did the checkout service restart five times?
-
-KubePilot should:
-
-1. Gather deployment information
-2. Retrieve pod events
-3. Fetch logs
-4. Correlate findings
-5. Present a concise explanation
-
----
-
-# System Architecture
-
-## Agent Layer
-
-Responsibilities:
-
-* User interaction
-* Tool orchestration
-* Decision making
-* Multi-step reasoning
-
-Technology:
-
-* LangGraph
-* LangChain
-* Python
-
----
-
-## Knowledge Layer
-
-Responsibilities:
-
-* Document ingestion
-* Chunking
-* Embedding generation
-* Retrieval
-
-Technology:
-
-* FAISS
-* Sentence Transformers
-
----
-
-## Tool Layer
-
-Responsibilities:
-
-* Kubernetes interactions
-* Deployment inspection
-* Event retrieval
-* Log collection
-
-Technology:
-
-* Go
-* client-go
-* REST APIs
-
----
-
-## API Layer
-
-Responsibilities:
-
-* Agent access
-* Request handling
-* Streaming responses
-
-Technology:
-
-* FastAPI
-
----
-
-## Platform Layer
-
-Responsibilities:
-
-* Container orchestration
-* Service deployment
-* Configuration management
-
-Technology:
-
-* Docker
-* Kubernetes
-* Helm
-
----
-
-## GitOps Layer
-
-Responsibilities:
-
-* Continuous delivery
-* Drift detection
-* Environment synchronization
-
-Technology:
-
-* ArgoCD
-* GitHub Actions
-
----
-
-## Observability Layer
-
-Responsibilities:
-
-* Metrics
-* Dashboards
-* Service monitoring
-
-Technology:
-
-* Prometheus
-* Grafana
-
----
-
-# Repository Structure
+## Implemented architecture
 
 ```text
-kubepilot/
-
-├── agent/
-│   ├── graph/
-│   ├── prompts/
-│   ├── tools/
-│   └── state/
-│
-├── rag/
-│   ├── loaders/
-│   ├── chunking/
-│   ├── embeddings/
-│   ├── retrieval/
-│   └── evaluation/
-│
-├── services/
-│   ├── api/
-│   ├── k8s-tool/
-│   └── deploy-tool/
-│
-├── docs/
-│   └── runbooks/
-│
-├── helm/
-│
-├── gitops/
-│
-├── monitoring/
-│
-├── tests/
-│
-├── scripts/
-│
-└── PROJECT_VISION.md
+Static web console (nginx)
+          |
+FastAPI routes and streaming responses
+          |
+          +-- authentication, allowlists, rate limiting, audit, metrics
+          +-- deterministic or optional LangGraph workflow orchestration
+          +-- keyword or optional FAISS runbook retrieval
+          +-- deterministic or configured external answer provider
+          +-- Kubernetes adapter
+                |-- in-process fixtures
+                |-- Go HTTP tool service
+                `-- optional Python Kubernetes client
+          |
+Postgres incident store or in-memory fallback
 ```
 
----
+`web/` contains the static console. `services/api/` contains FastAPI endpoints
+for chat, status, capabilities, runbook search, cluster evidence, diagnosis,
+incident reports, remediation plans, audit events, and traces.
 
-# Engineering Principles
+`agent/` routes supported intents and gathers evidence through typed tools. The
+default workflow and answer provider are deterministic; LangGraph is optional.
+`rag/` loads Markdown runbooks. Keyword retrieval is default and FAISS is an
+optional local index. Retrieved evidence does not guarantee answer correctness.
 
-* Local-first development
-* Infrastructure as Code
-* GitOps-driven deployments
-* Testable components
-* Modular architecture
-* Production-style repository structure
-* Clear separation of concerns
-* Observable services
-* Reproducible environments
+The API supports fixture, Go service, kubeconfig, and in-cluster Kubernetes
+adapters. Compose calls the Go service in fixture mode. Python live-cluster
+modes require an optional dependency that the base Dockerfile does not install.
+Implemented Kubernetes operations are reads; remediation endpoints generate
+plans but do not execute them.
 
----
+Platform assets include a fixture Docker Compose stack, an API-only Helm chart,
+reference Argo CD manifests, Prometheus/Grafana configuration, and GitHub
+Actions checks. Each requires environment-specific review beyond the local
+demo.
 
-# Implementation Snapshot
+## Current limitations
 
-## Already Implemented
+- No supported release image or versioned production release is published.
+- The root API image lacks the optional dependency for live Kubernetes modes.
+- Helm does not include the web console, database, monitoring, or Go tool.
+- Fixtures cannot validate real permissions, scale, latency, or data handling.
+- External models, OIDC, telemetry, secret stores, ingress, and GitOps require
+  operator-owned services and configuration.
+- Production availability, security assurance, recovery, multi-tenancy, and
+  support commitments have not been established.
 
-- [x] FastAPI service with chat, health, readiness, and metrics endpoints
-- [x] Local markdown runbook loading, chunking, and retrieval
-- [x] Optional FAISS-backed vector retrieval
-- [x] Deterministic Kubernetes health, diagnosis, and incident-report tools
-- [x] Docker Compose, Helm chart, Prometheus config, Grafana dashboard, and ArgoCD manifest
-- [x] GitHub Actions CI for linting, tests, index build validation, Docker build, and Helm rendering
+## Roadmap
 
-## Still To Build
+### Now
 
-- [ ] Full local-cluster deployment validation path (in progress)
+- Keep the fixture demo, docs, API schema, and checks reproducible.
+- Align live-cluster guidance with actual packaging and permissions.
+- Expand tests around evidence, policy, and failure handling.
 
----
+### Next
 
-# MVP Definition
+- Package and test a dedicated real-cluster image path.
+- Add an automated kind test for read-only live-cluster inspection.
+- Define deployment paths for the web console and persistent storage.
+- Improve authentication, authorization, redaction, and retention tests.
 
-The first release of KubePilot is considered successful when:
+### Later, after validation
 
-- [x] Runbooks can be indexed into FAISS
-- [x] Questions can be answered through RAG
-- [x] LangGraph agent can use tools
-- [x] Kubernetes status can be queried through Go services
-- [x] FastAPI exposes a chat endpoint
-- [x] Services run locally using Docker
-- [ ] Deployment works on a local Kubernetes cluster (in progress)
-- [x] Basic metrics are exposed
-- [x] GitHub Actions validates builds and tests
+- Evaluate broader workload types and evidence correlation.
+- Evaluate approval workflows without unattended writes by default.
+- Decide whether hosted or commercial directions are justified by user
+  feedback.
 
----
-
-# Future Enhancements
-
-* Multi-cluster support
-* Cloud provider integrations
-* Incident timeline generation
-* Automated remediation workflows
-* Slack integration
-* RBAC-aware agent actions
-* Vector database migration
-* OpenTelemetry tracing
-* Multi-agent architecture
-* Production cloud deployment
-
----
-
-# Long-Term Goal
-
-Build a production-grade AI-powered Kubernetes operations platform that showcases expertise in:
-
-* AI Engineering
-* Retrieval-Augmented Generation
-* LangGraph
-* FastAPI
-* Go
-* Kubernetes
-* Helm
-* GitOps
-* ArgoCD
-* CI/CD
-* Observability
-* Platform Engineering
-* DevOps
-
-```
-```
+Roadmap items are plans, not completed features or promised dates.

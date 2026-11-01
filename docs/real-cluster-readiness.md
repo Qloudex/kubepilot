@@ -1,110 +1,110 @@
-# Real Cluster Readiness
+# Real-cluster readiness
 
-KubePilot defaults to fixture mode so the demo is repeatable. Real cluster mode
-is available when you want the API to inspect live Kubernetes deployments, pods,
-events, and logs.
+KubePilot defaults to deterministic fixture data. Real-cluster adapters exist,
+but live access is experimental and requires dependency, image, RBAC,
+authentication, and data-handling review for the target environment.
 
-## Modes
+## Runtime modes
 
-| Mode | Use when | Required setting |
-| --- | --- | --- |
-| `fixture` | local demo, CI, screenshots | `KUBEPILOT_K8S_MODE=fixture` |
-| `kubeconfig` | running API on your laptop against a cluster | `KUBEPILOT_K8S_MODE=kubeconfig` |
-| `in_cluster` | running KubePilot inside Kubernetes | `KUBEPILOT_K8S_MODE=in_cluster` |
+| Component | Mode | Purpose | Runtime requirement |
+| --- | --- | --- | --- |
+| Python API | `fixture` | In-process deterministic data | Base install |
+| Python API | `service` | Calls the Go Kubernetes tool service | Reachable `KUBEPILOT_K8S_SERVICE_URL` |
+| Python API | `kubeconfig` | Reads a cluster from a local kubeconfig | `kubernetes` extra and readable kubeconfig |
+| Python API | `in_cluster` | Reads the cluster containing the API pod | `kubernetes` extra, service account, and RBAC |
+| Go tool | `fixture` | Deterministic HTTP responses | Default tool image |
+| Go tool | `cluster` | Reads a live cluster with client-go | Kubeconfig or in-cluster credentials and RBAC |
 
-The Go tool service has its own mode:
+The Compose demo uses Python API `service` mode and Go tool `fixture` mode. It
+is not a real-cluster test.
 
-| Mode | Use when | Required setting |
-| --- | --- | --- |
-| `fixture` | deterministic local service output | `KUBEPILOT_K8S_TOOL_MODE=fixture` |
-| `cluster` | live cluster reads through the tool service | `KUBEPILOT_K8S_TOOL_MODE=cluster` |
+## Current packaging boundary
 
-## Kubeconfig Mode
+The root `Dockerfile` runs `pip install .`, which installs base dependencies but
+not the optional Python `kubernetes` package. The Helm chart deploys that API
+image only. Setting `KUBEPILOT_K8S_MODE=in_cluster` on the image built by the
+current `scripts/kind-demo.sh` therefore causes a missing-dependency error when
+the Kubernetes client is initialized.
 
-Use this mode when running the API locally against a real cluster.
+Before testing `kubeconfig` or `in_cluster`, create and validate an image that
+installs `.[kubernetes]` or `.[all]`. Changing the image is outside this
+documentation-only phase; do not treat the current kind script as an end-to-end
+real-cluster demo. The chart also does not deploy the web console, Postgres,
+Grafana, Prometheus, or Go tool service.
+
+## Local API with kubeconfig
+
+Use a narrowly scoped test cluster and context. Python 3.11 or newer is
+required.
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev,kubernetes]"
 export KUBEPILOT_K8S_MODE=kubeconfig
-export KUBEPILOT_KUBECONFIG="$HOME/.kube/config"
+export KUBEPILOT_KUBECONFIG=/absolute/path/to/test-kubeconfig
 export KUBEPILOT_ALLOWED_NAMESPACES=payments,platform,notifications
 export KUBEPILOT_ALLOWED_ACTIONS=cluster:health,deployment:diagnose,deployment:incident-report,deployment:remediation-plan
 uvicorn kubepilot_api.main:app --reload
 ```
 
-Smoke the live boundary:
+In another shell, using names that exist in the connected cluster:
 
 ```bash
-curl http://127.0.0.1:8000/api/v1/status
-curl http://127.0.0.1:8000/api/v1/cluster/health
-curl http://127.0.0.1:8000/api/v1/cluster/namespaces/payments/deployments/checkout/diagnose
+curl --fail http://127.0.0.1:8000/api/v1/status
+curl --fail http://127.0.0.1:8000/api/v1/cluster/health
+curl --fail http://127.0.0.1:8000/api/v1/cluster/namespaces/payments/deployments/checkout/diagnose
 ```
 
-## In-cluster Helm Mode
+Include the `x-api-key` header when API keys are configured.
 
-Install KubePilot into a cluster with the Kubernetes client enabled:
+## In-cluster API evaluation
+
+After producing an image with the Kubernetes extra, load or publish it and
+override the chart image explicitly:
 
 ```bash
 helm upgrade --install kubepilot ./helm/kubepilot \
   --namespace kubepilot \
   --create-namespace \
+  --set image.repository=REGISTRY/kubepilot-api \
+  --set image.tag=IMMUTABLE_TAG \
+  --set image.pullPolicy=IfNotPresent \
   --set env.KUBEPILOT_K8S_MODE=in_cluster \
-  --set env.KUBEPILOT_ALLOWED_NAMESPACES=payments,platform,notifications \
-  --set env.KUBEPILOT_ALLOWED_ACTIONS=cluster:health,deployment:diagnose,deployment:incident-report,deployment:remediation-plan
+  --set env.KUBEPILOT_ALLOWED_NAMESPACES=payments,platform,notifications
 ```
 
-For the local kind demo:
+Check effective permissions before calling the API:
 
 ```bash
-./scripts/kind-demo.sh
+kubectl auth can-i list deployments --all-namespaces \
+  --as=system:serviceaccount:kubepilot:kubepilot-kubepilot
+kubectl auth can-i get pods --all-namespaces \
+  --as=system:serviceaccount:kubepilot:kubepilot-kubepilot
+kubectl auth can-i get pods --subresource=log --all-namespaces \
+  --as=system:serviceaccount:kubepilot:kubepilot-kubepilot
+```
+
+Then expose only the API locally:
+
+```bash
+kubectl rollout status deployment/kubepilot-kubepilot --namespace kubepilot
 kubectl port-forward service/kubepilot-kubepilot 18000:8000 --namespace kubepilot
+curl --fail http://127.0.0.1:18000/healthz
+curl --fail http://127.0.0.1:18000/readyz
+curl --fail http://127.0.0.1:18000/api/v1/cluster/health
 ```
 
-Then open:
+## Production-shaped chart controls
 
-```text
-http://127.0.0.1:18000
-```
+The chart includes optional ingress/TLS, autoscaling, disruption budget,
+secret-backed environment variables, External Secrets, and network policy.
+These are templates, not evidence of a production deployment.
 
-## Production Helm Controls
-
-The chart supports production-shaped controls without enabling them by default:
-
-- `ingress.enabled` for external routing and TLS
-- `autoscaling.enabled` for HorizontalPodAutoscaler
-- `podDisruptionBudget.enabled` for voluntary disruption protection
-- `envFromSecrets` for secret-backed values such as LLM endpoints and OTLP
-  headers
-- `networkPolicy.enabled` for restricted ingress
-
-The production values use `ghcr.io/aryansharma9917/kubepilot-api` with a
-commit-based `sha-...` tag. Publish that exact tag before deploying, or override
-`image.repository` and `image.tag` with an immutable digest-backed release.
-
-For production, configure External Secrets Operator with the
-`ClusterSecretStore` or `SecretStore` named by
-`externalSecret.secretStoreRef`. Store the keys listed in
-`helm/kubepilot/values-production.yaml` at the configured
-`externalSecret.remoteKey`; do not commit their values or create the target
-Secret imperatively. Verify the service account's read-only permissions with
-`kubectl auth can-i --as=system:serviceaccount:kubepilot:kubepilot-kubepilot`.
-
-After deployment, verify the external secret and workload:
-
-```bash
-kubectl get externalsecret kubepilot-kubepilot \
-  --namespace kubepilot \
-  --output=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
-kubectl rollout status deployment/kubepilot-kubepilot \
-  --namespace kubepilot
-```
-
-To rotate a credential, update only the corresponding property at the
-external provider. Wait for the ExternalSecret refresh interval, confirm the
-target Secret's resource version changes, and verify the API or provider
-connection. No image rebuild or Helm chart change is required. Record the
-rotation and validation result according to the team's audit policy.
-
-Render a production-shaped manifest:
+Production values refer to `ghcr.io/aryansharma9917/kubepilot-api` with a
+commit-style tag. Publish the referenced immutable image or override repository
+and tag. Validate the destination secret store, ingress, certificate issuer,
+egress policy, and telemetry endpoint.
 
 ```bash
 helm template kubepilot ./helm/kubepilot \
@@ -112,44 +112,26 @@ helm template kubepilot ./helm/kubepilot \
   --values helm/kubepilot/values-production.yaml
 ```
 
-## Policy Examples
+## Security review
 
-Namespace policy:
-
-```bash
-export KUBEPILOT_ALLOWED_NAMESPACES=payments,platform
-```
-
-Action policy:
-
-```bash
-export KUBEPILOT_ALLOWED_ACTIONS=cluster:health,deployment:diagnose,deployment:incident-report,deployment:remediation-plan
-```
-
-API key protection:
-
-```bash
-export KUBEPILOT_API_KEYS=local-demo-key
-curl -H "x-api-key: local-demo-key" http://127.0.0.1:8000/api/v1/cluster/health
-```
+- Enable API-key or OIDC authentication before network exposure.
+- Namespace/action allowlists complement rather than replace Kubernetes RBAC.
+- Review cluster-wide list/watch permissions and `pods/log` access; prefer
+  namespace-scoped permissions where possible.
+- Assume events, logs, prompts, reports, traces, and audit data can be sensitive.
+- Keep credentials out of Helm values and Git.
+- Remediation plans are not executed; validate every proposed command manually.
 
 ## Troubleshooting
 
 | Symptom | Check |
 | --- | --- |
-| `/readyz` fails | Confirm the API can initialize settings and the Kubernetes mode is valid. |
-| `kubeconfig` mode cannot connect | Confirm `KUBEPILOT_KUBECONFIG` points to a readable file and the current context is correct. |
-| `in_cluster` mode is forbidden | Check the chart RBAC and service account binding in the `kubepilot` namespace. |
-| deployment diagnosis returns not found | Confirm namespace allowlist, deployment name, and workload namespace. |
-| logs are missing | Confirm RBAC includes `pods/log` and the pod container is still available. |
-| Helm image pull fails | Set `image.repository`, `image.tag`, and `image.pullPolicy` for your registry or kind image. |
+| Optional package error | Confirm the environment or image contains the `kubernetes` extra. |
+| Kubeconfig cannot connect | Confirm absolute path, context, reachability, and certificate credentials. |
+| In-cluster request is forbidden | Check the pod service account and effective RBAC. |
+| Diagnosis returns not found | Confirm allowlist, deployment name, and cluster context. |
+| Logs are missing | Confirm `pods/log` access, pod/container selection, and retention. |
+| Image pull fails | Override repository, immutable tag, pull policy, and pull secret. |
 
-## Demo Checklist
-
-1. Run `./scripts/kind-demo.sh`.
-2. Port-forward the API service.
-3. Open the web console.
-4. Ask `Show unhealthy workloads`.
-5. Run diagnosis for `payments` / `checkout`.
-6. Open the Incident tab and copy the status update.
-7. Open Observability and confirm traces, audit events, and agent trail appear.
+For a chart smoke test without live reads, use
+[fixture-mode local cluster validation](local-cluster.md).

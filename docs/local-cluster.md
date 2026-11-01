@@ -1,15 +1,19 @@
-# Local Cluster Validation
+# Local cluster validation
 
-KubePilot can run against a local Kubernetes cluster in fixture mode. This
-validates the container image, Helm chart, readiness probes, and metrics endpoint
-without requiring a live application cluster.
+KubePilot can deploy its API to a local cluster while keeping the Kubernetes
+adapter in fixture mode. This validates the base API image, Helm chart, rollout,
+probes, metrics, and fixture response. It does not inspect the local cluster or
+deploy the web console and supporting Compose services.
 
 ## Prerequisites
 
 - Docker
 - kubectl
 - Helm
-- kind, optional but recommended
+- kind (recommended); without kind, the script uses the current kubectl context
+
+Confirm the current context first. On a non-kind context, the locally built
+image must be available to the cluster by another mechanism.
 
 ## One-command Smoke Test
 
@@ -58,16 +62,10 @@ You can also run the reusable validator directly once the service is reachable:
 PYTHONPATH=services/api python -m kubepilot_api.local_cluster --base-url http://127.0.0.1:18000
 ```
 
-## Real Cluster Mode
+## Real-cluster boundary
 
-Fixture mode is the default. To use the in-cluster Kubernetes client, set:
-
-```bash
-helm upgrade --install kubepilot ./helm/kubepilot \
-  --namespace kubepilot \
-  --create-namespace \
-  --set env.KUBEPILOT_K8S_MODE=in_cluster
-```
-
-The chart includes read-only RBAC for deployments, pods, and events. Log access
-uses the pods/log subresource when the cluster enforces subresource permissions.
+Do not switch this base image directly to `in_cluster` mode. The root Dockerfile
+does not install the optional Python `kubernetes` package required by that mode.
+The chart includes read-only RBAC for deployments, pods, events, and `pods/log`,
+but packaging and effective permissions still require validation. Follow
+[real-cluster readiness](real-cluster-readiness.md) for the experimental path.
